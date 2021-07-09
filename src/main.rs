@@ -1,5 +1,3 @@
-extern crate anyhow;
-
 use cpal::{StreamConfig};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::sync::{Arc, Mutex};
