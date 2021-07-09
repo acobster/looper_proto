@@ -2,7 +2,6 @@ extern crate anyhow;
 
 use cpal::{StreamConfig};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-//use fltk::{app, prelude::*, window::Window};
 use std::sync::{Arc, Mutex};
 
 fn main() -> anyhow::Result<()> {
@@ -75,13 +74,6 @@ fn main() -> anyhow::Result<()> {
     drop(input_stream);
     drop(output_stream);
     println!("Done!");
-
-    // TODO GUI code
-    //let app = app::App::default();
-    //let mut window = Window::new(100, 100, 400, 300, "Hello from Rust! 🦀");
-    //window.end();
-    //window.show();
-    //app.run().unwrap();
 
     Ok(())
 }
