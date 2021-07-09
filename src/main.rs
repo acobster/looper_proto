@@ -65,20 +65,18 @@ fn main() -> anyhow::Result<()> {
             let len = input_len.load(Ordering::Acquire);
             input_samples_[len] = sample;
             input_len.store(len+1, Ordering::Release);
-            // TODO avoid io in audio thread
-            println!("loop_len = {}", len+1);
         }
     };
 
     println!("RECORDING.");
     let input_stream = input.build_input_stream(&config, input_data_fn, err_fn)?;
-    println!("Successfully built streams.");
 
     input_stream.play()?;
     std::thread::sleep(std::time::Duration::from_secs(3));
     // end of thread::sleep() simulates the user pressing the recording button
     // a second time, signaling the end of the loop recording.
     recording_mut.store(false, Ordering::Release);
+    println!("DONE RECORDING.");
 
     let mut output_idx = 0;
     let output_data_fn = move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
@@ -91,8 +89,6 @@ fn main() -> anyhow::Result<()> {
                 output_idx = 0;
             }
         }
-        // TODO avoid io in audio thread
-        println!("output_idx = {}", output_idx);
     };
     let output_stream = output.build_output_stream(&config, output_data_fn, err_fn)?;
     output_stream.play()?;
@@ -100,7 +96,6 @@ fn main() -> anyhow::Result<()> {
 
     drop(input_stream);
     drop(output_stream);
-    println!("Done!");
 
     Ok(())
 }
