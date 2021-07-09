@@ -1,9 +1,9 @@
 extern crate anyhow;
 
-use cpal::{Sample, StreamConfig};
+use cpal::{StreamConfig};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 //use fltk::{app, prelude::*, window::Window};
-use ringbuf::RingBuffer;
+use std::sync::{Arc, Mutex};
 
 fn main() -> anyhow::Result<()> {
     // Set up an audio Device.
@@ -19,48 +19,48 @@ fn main() -> anyhow::Result<()> {
     let config: StreamConfig = output.default_input_config()?.into();
     println!("Output config:  {:?}", config);
 
-    let default_latency = 200.0;
+    // Design notes:
+    //
+    // Below is our vector of samples. Each line between the [ square brackets ]
+    // is a loop; each dot is a sample. (This is many thousands of times
+    // below the number of samples we actually deal with in a buffer, but this
+    // is fine for an illustration.
+    //
+    // [
+    //  .....
+    //  .....
+    //  .....
+    //  ...
+    //    ^
+    //    |
+    //    +----- this is where the current recording ends, and is where the
+    //           looper playback index is in this example.
+    //
+    //
+    //
+    // ]
+    //
+    // loop_len = 5
+    // loop_count = 3
+    //
+    // playback:
+    // sample_idx = 0..loop_len-1
 
-    // configure latency between input/output
-    let latency_frames = (default_latency / 1000.0) * config.sample_rate.0 as f32;
-    let latency_samples = latency_frames as usize * config.channels as usize;
+    let samples: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(vec![0.0; 44100 * 10]));
 
-    let ring = RingBuffer::new(latency_samples * 2);
-    let (mut producer, mut consumer) = ring.split();
-
-    for _ in 0..latency_samples {
-        // "this should never fail"
-        producer.push(0.0).unwrap();
-    }
+    // Split our Arc into consumer/producer so we can read from/write to it
+    // within separate input/output audio callbacks.
+    let input_samples = samples.clone();
 
     let input_data_fn = move |data: &[f32], _: &cpal::InputCallbackInfo| {
-        let mut output_fell_behind = false;
         for &sample in data {
-            if producer.push(sample).is_err() {
-                output_fell_behind = true;
-            }
-        }
-        if output_fell_behind {
-            eprintln!("output stream fell behind: try increasing latency");
+            (*input_samples.lock().unwrap())[0] = sample;
         }
     };
 
     let output_data_fn = move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
-        let mut input_fell_behind = false;
         for sample in data {
-            *sample = match consumer.pop() {
-                // Write each sample from the input stream buffer
-                // into the output.
-                Some(s) => s,
-                None => {
-                    input_fell_behind = true;
-                    0.0
-                }
-            }
-        }
-        // This seems to happen for anything below ~200ms for some reason.
-        if input_fell_behind {
-            eprintln!("input stream fell behind: try increasing latency");
+            *sample = (*samples.lock().unwrap())[0];
         }
     };
 
@@ -68,7 +68,6 @@ fn main() -> anyhow::Result<()> {
     let output_stream = output.build_output_stream(&config, output_data_fn, err_fn)?;
     println!("Successfully built streams.");
 
-    println!("Playing with latency={}ms", default_latency);
     input_stream.play()?;
     output_stream.play()?;
 
