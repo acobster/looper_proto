@@ -72,8 +72,9 @@ fn main() -> anyhow::Result<()> {
 
     let mut output_idx = 0;
     let output_data_fn = move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
+        let playback_samples = samples.lock().unwrap();
         for sample in data {
-            *sample = (*samples.lock().unwrap())[output_idx];
+            *sample = playback_samples[output_idx];
             output_idx += 1;
         }
         // TODO avoid io in audio thread
