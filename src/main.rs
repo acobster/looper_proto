@@ -59,9 +59,11 @@ fn main() -> anyhow::Result<()> {
             (*input_samples.lock().unwrap())[input_idx] = sample;
             input_idx += 1;
         }
+        // TODO avoid io in audio thread
         println!("input_idx = {}", input_idx);
     };
 
+    println!("RECORDING.");
     let input_stream = input.build_input_stream(&config, input_data_fn, err_fn)?;
     println!("Successfully built streams.");
 
@@ -74,6 +76,7 @@ fn main() -> anyhow::Result<()> {
             *sample = (*samples.lock().unwrap())[output_idx];
             output_idx += 1;
         }
+        // TODO avoid io in audio thread
         println!("output_idx = {}", output_idx);
     };
     let output_stream = output.build_output_stream(&config, output_data_fn, err_fn)?;
