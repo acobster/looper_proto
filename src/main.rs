@@ -3,7 +3,7 @@ extern crate anyhow;
 use cpal::{StreamConfig};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::sync::{Arc, Mutex};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 fn main() -> anyhow::Result<()> {
     // Set up an audio Device.
@@ -47,7 +47,7 @@ fn main() -> anyhow::Result<()> {
     // sample_idx = 0..loop_len-1
 
     let samples: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(vec![0.0; 44100 * 100]));
-    let loop_len = Arc::new(Mutex::new(0 as usize));
+    let loop_len = Arc::new(AtomicUsize::new(0));
     let recording = Arc::new(AtomicBool::new(true));
     let recording_mut = recording.clone();
 
@@ -56,19 +56,18 @@ fn main() -> anyhow::Result<()> {
     let input_samples = samples.clone();
     let input_len = loop_len.clone();
     let input_data_fn = move |data: &[f32], _: &cpal::InputCallbackInfo| {
-        let recording_ = recording.load(Ordering::Relaxed);
-        println!("recording? {}", recording_);
-        if !recording_ {
+        if !recording.load(Ordering::Acquire) {
+            // We're not recording, save nothing.
             return;
         }
         let mut input_samples_ = input_samples.lock().unwrap();
-        let mut input_len_ = input_len.lock().unwrap();
         for &sample in data {
-            input_samples_[*input_len_] = sample;
-            *input_len_ += 1;
+            let len = input_len.load(Ordering::Acquire);
+            input_samples_[len] = sample;
+            input_len.store(len+1, Ordering::Release);
+            // TODO avoid io in audio thread
+            println!("loop_len = {}", len+1);
         }
-        // TODO avoid io in audio thread
-        println!("loop_len = {}", input_len_);
     };
 
     println!("RECORDING.");
@@ -79,9 +78,7 @@ fn main() -> anyhow::Result<()> {
     std::thread::sleep(std::time::Duration::from_secs(3));
     // end of thread::sleep() simulates the user pressing the recording button
     // a second time, signaling the end of the loop recording.
-    recording_mut.store(false, Ordering::Relaxed);
-
-    println!("loop_len = {}", loop_len.lock().unwrap());
+    recording_mut.store(false, Ordering::Release);
 
     let mut output_idx = 0;
     let output_data_fn = move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
@@ -89,7 +86,7 @@ fn main() -> anyhow::Result<()> {
         for sample in data {
             *sample = playback_samples[output_idx];
             output_idx += 1;
-            if output_idx >= *loop_len.lock().unwrap() {
+            if output_idx >= loop_len.load(Ordering::Acquire) {
                 // RESET THE LOOP PLAYBACK
                 output_idx = 0;
             }
