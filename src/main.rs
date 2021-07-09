@@ -45,32 +45,41 @@ fn main() -> anyhow::Result<()> {
     // playback:
     // sample_idx = 0..loop_len-1
 
-    let samples: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(vec![0.0; 44100 * 10]));
+    let samples: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(vec![0.0; 44100 * 100]));
+    //let sample_idx = Arc::new(Mutex::new(0 as usize));
 
-    // Split our Arc into consumer/producer so we can read from/write to it
+    // Clone our Arc so we can read from/write to it
     // within separate input/output audio callbacks.
     let input_samples = samples.clone();
 
+    let mut input_idx = 0;
+
     let input_data_fn = move |data: &[f32], _: &cpal::InputCallbackInfo| {
         for &sample in data {
-            (*input_samples.lock().unwrap())[0] = sample;
+            (*input_samples.lock().unwrap())[input_idx] = sample;
+            input_idx += 1;
         }
-    };
-
-    let output_data_fn = move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
-        for sample in data {
-            *sample = (*samples.lock().unwrap())[0];
-        }
+        println!("input_idx = {}", input_idx);
     };
 
     let input_stream = input.build_input_stream(&config, input_data_fn, err_fn)?;
-    let output_stream = output.build_output_stream(&config, output_data_fn, err_fn)?;
     println!("Successfully built streams.");
 
     input_stream.play()?;
-    output_stream.play()?;
+    std::thread::sleep(std::time::Duration::from_secs(3));
 
-    std::thread::sleep(std::time::Duration::from_secs(10));
+    let mut output_idx = 0;
+    let output_data_fn = move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
+        for sample in data {
+            *sample = (*samples.lock().unwrap())[output_idx];
+            output_idx += 1;
+        }
+        println!("output_idx = {}", output_idx);
+    };
+    let output_stream = output.build_output_stream(&config, output_data_fn, err_fn)?;
+    output_stream.play()?;
+    std::thread::sleep(std::time::Duration::from_secs(3));
+
     drop(input_stream);
     drop(output_stream);
     println!("Done!");
