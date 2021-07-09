@@ -55,8 +55,9 @@ fn main() -> anyhow::Result<()> {
     let mut input_idx = 0;
 
     let input_data_fn = move |data: &[f32], _: &cpal::InputCallbackInfo| {
+        let mut input_samples_ = input_samples.lock().unwrap();
         for &sample in data {
-            (*input_samples.lock().unwrap())[input_idx] = sample;
+            input_samples_[input_idx] = sample;
             input_idx += 1;
         }
         // TODO avoid io in audio thread
@@ -69,6 +70,8 @@ fn main() -> anyhow::Result<()> {
 
     input_stream.play()?;
     std::thread::sleep(std::time::Duration::from_secs(3));
+    // end of thread::sleep() simulates the user pressing the recording button
+    // a second time, signaling the end of the loop recording.
 
     let mut output_idx = 0;
     let output_data_fn = move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
