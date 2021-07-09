@@ -3,6 +3,7 @@ extern crate anyhow;
 use cpal::{StreamConfig};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 fn main() -> anyhow::Result<()> {
     // Set up an audio Device.
@@ -46,22 +47,28 @@ fn main() -> anyhow::Result<()> {
     // sample_idx = 0..loop_len-1
 
     let samples: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(vec![0.0; 44100 * 100]));
-    //let sample_idx = Arc::new(Mutex::new(0 as usize));
+    let loop_len = Arc::new(Mutex::new(0 as usize));
+    let recording = Arc::new(AtomicBool::new(true));
+    let recording_mut = recording.clone();
 
     // Clone our Arc so we can read from/write to it
     // within separate input/output audio callbacks.
     let input_samples = samples.clone();
-
-    let mut input_idx = 0;
-
+    let input_len = loop_len.clone();
     let input_data_fn = move |data: &[f32], _: &cpal::InputCallbackInfo| {
+        let recording_ = recording.load(Ordering::Relaxed);
+        println!("recording? {}", recording_);
+        if !recording_ {
+            return;
+        }
         let mut input_samples_ = input_samples.lock().unwrap();
+        let mut input_len_ = input_len.lock().unwrap();
         for &sample in data {
-            input_samples_[input_idx] = sample;
-            input_idx += 1;
+            input_samples_[*input_len_] = sample;
+            *input_len_ += 1;
         }
         // TODO avoid io in audio thread
-        println!("input_idx = {}", input_idx);
+        println!("loop_len = {}", input_len_);
     };
 
     println!("RECORDING.");
@@ -72,6 +79,9 @@ fn main() -> anyhow::Result<()> {
     std::thread::sleep(std::time::Duration::from_secs(3));
     // end of thread::sleep() simulates the user pressing the recording button
     // a second time, signaling the end of the loop recording.
+    recording_mut.store(false, Ordering::Relaxed);
+
+    println!("loop_len = {}", loop_len.lock().unwrap());
 
     let mut output_idx = 0;
     let output_data_fn = move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
@@ -79,13 +89,17 @@ fn main() -> anyhow::Result<()> {
         for sample in data {
             *sample = playback_samples[output_idx];
             output_idx += 1;
+            if output_idx >= *loop_len.lock().unwrap() {
+                // RESET THE LOOP PLAYBACK
+                output_idx = 0;
+            }
         }
         // TODO avoid io in audio thread
         println!("output_idx = {}", output_idx);
     };
     let output_stream = output.build_output_stream(&config, output_data_fn, err_fn)?;
     output_stream.play()?;
-    std::thread::sleep(std::time::Duration::from_secs(3));
+    std::thread::sleep(std::time::Duration::from_secs(9));
 
     drop(input_stream);
     drop(output_stream);
