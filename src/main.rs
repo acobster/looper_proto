@@ -20,7 +20,7 @@ fn main() -> anyhow::Result<()> {
     // Design notes:
     //
     // Below is our vector of samples. Each line between the [ square brackets ]
-    // is a loop; each dot is a sample. (This is many thousands of times
+    // is a loop; each dot is a sample. This is many thousands of times
     // below the number of samples we actually deal with in a buffer, but this
     // is fine for an illustration.
     //
