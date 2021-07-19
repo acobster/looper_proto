@@ -46,13 +46,20 @@ fn main() -> anyhow::Result<()> {
 
     let samples: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(vec![0.0; 44100 * 100]));
     let loop_len = Arc::new(AtomicUsize::new(0));
+    let total_samples = Arc::new(AtomicUsize::new(0));
     let recording = Arc::new(AtomicBool::new(true));
+    let is_first_loop = Arc::new(AtomicBool::new(true));
+    let output_total_samples = total_samples.clone();
+    let output_is_first_loop = is_first_loop.clone();
+
+    // Clone these so we can modify them in response to user input.
     let recording_mut = recording.clone();
+    let is_first_loop_mut = is_first_loop.clone();
 
     // Clone our Arc so we can read from/write to it
     // within separate input/output audio callbacks.
     let input_samples = samples.clone();
-    let input_len = loop_len.clone();
+    let input_loop_len = loop_len.clone();
     let input_data_fn = move |data: &[f32], _: &cpal::InputCallbackInfo| {
         if !recording.load(Ordering::Acquire) {
             // We're not recording, save nothing.
@@ -60,37 +67,71 @@ fn main() -> anyhow::Result<()> {
         }
         let mut input_samples_ = input_samples.lock().unwrap();
         for &sample in data {
-            let len = input_len.load(Ordering::Acquire);
+            // Keep appending samples to the Vector
+            let len = total_samples.load(Ordering::Acquire);
             input_samples_[len] = sample;
-            input_len.store(len+1, Ordering::Release);
+            total_samples.store(len+1, Ordering::Release);
+            if is_first_loop.load(Ordering::Acquire) {
+                input_loop_len.store(len+1, Ordering::Release);
+            }
         }
+        //println!("total_samples={}, input_loop_len={}", total_samples.load(Ordering::Acquire), input_loop_len.load(Ordering::Acquire));
     };
-
-    println!("RECORDING.");
     let input_stream = input.build_input_stream(&config, input_data_fn, err_fn)?;
 
-    input_stream.play()?;
-    std::thread::sleep(std::time::Duration::from_secs(3));
-    // end of thread::sleep() simulates the user pressing the recording button
-    // a second time, signaling the end of the loop recording.
-    recording_mut.store(false, Ordering::Release);
-    println!("DONE RECORDING.");
-
+    // Setup output callback & stream.
     let mut output_idx = 0;
     let output_data_fn = move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
+        if output_is_first_loop.load(Ordering::Acquire) {
+            // Bail; no playback yet.
+            return;
+        }
+
         let playback_samples = samples.lock().unwrap();
+        let len = loop_len.load(Ordering::Acquire);
+        let loop_count = div_ceil(
+            output_total_samples.load(Ordering::Acquire),
+            len
+        );
+
         for sample in data {
-            *sample = playback_samples[output_idx];
+            // Sum up all samples at each corresponding index across loops.
+            let mut sum = 0.0;
+            for loop_offset in 0..(loop_count-1) {
+                let sample_idx = output_idx + len * loop_offset;
+                sum += playback_samples[sample_idx];
+            }
+            // TODO dynamic range compression!
+            *sample = sum;
+
             output_idx += 1;
-            if output_idx >= loop_len.load(Ordering::Acquire) {
+            if output_idx >= len {
                 // RESET THE LOOP PLAYBACK
                 output_idx = 0;
             }
         }
+        //println!("output_idx={}", output_idx);
     };
     let output_stream = output.build_output_stream(&config, output_data_fn, err_fn)?;
+
     output_stream.play()?;
-    std::thread::sleep(std::time::Duration::from_secs(9));
+    input_stream.play()?;
+
+    // Simulate the user hitting RECORD on the pedal three times...
+    println!("RECORDING.");
+    std::thread::sleep(std::time::Duration::from_secs(3));
+    // end of thread::sleep() simulates the user pressing the recording button
+    // a second time, signaling the end of the FIRST loop recording.
+    is_first_loop_mut.store(false, Ordering::Release);
+    println!("SET FIRST LOOP LENGTH.");
+
+    std::thread::sleep(std::time::Duration::from_secs(3));
+    // end of thread::sleep() simulates the user pressing the recording button
+    // a THIRD time, signaling the end of recording any new loops.
+    recording_mut.store(false, Ordering::Release);
+    println!("DONE RECORDING.");
+
+    std::thread::sleep(std::time::Duration::from_secs(6));
 
     drop(input_stream);
     drop(output_stream);
@@ -100,4 +141,15 @@ fn main() -> anyhow::Result<()> {
 
 fn err_fn(err: cpal::StreamError) {
     eprintln!("an error occurred on stream: {}", err);
+}
+
+
+#[inline]
+fn div_ceil(first: usize, other: usize) -> usize {
+    let (d, r) = (first / other, first % other);
+    if r > 0 && other > 0 {
+        d + 1
+    } else {
+        d
+    }
 }
