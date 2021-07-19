@@ -125,7 +125,7 @@ fn main() -> anyhow::Result<()> {
     is_first_loop_mut.store(false, Ordering::Release);
     println!("SET FIRST LOOP LENGTH.");
 
-    std::thread::sleep(std::time::Duration::from_secs(3));
+    std::thread::sleep(std::time::Duration::from_secs(6));
     // end of thread::sleep() simulates the user pressing the recording button
     // a THIRD time, signaling the end of recording any new loops.
     recording_mut.store(false, Ordering::Release);
@@ -146,10 +146,9 @@ fn err_fn(err: cpal::StreamError) {
 
 #[inline]
 fn div_ceil(first: usize, other: usize) -> usize {
-    let (d, r) = (first / other, first % other);
-    if r > 0 && other > 0 {
-        d + 1
+    if (first % other) > 0 && other > 0 {
+        first / other + 1
     } else {
-        d
+        first / other
     }
 }
