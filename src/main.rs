@@ -137,10 +137,10 @@ impl State {
     fn new() -> Self {
         Self {
             samples: Arc::new(Mutex::new(vec![0.0; 44100 * 100])),
-            loop_len: Arc::new(AtomicUsize::new(0)),
-            total_samples: Arc::new(AtomicUsize::new(0)),
-            is_recording: Arc::new(AtomicBool::new(true)),
-            is_first_loop: Arc::new(AtomicBool::new(true)),
+            loop_len: Arc::new(0.into()),
+            total_samples: Arc::new(0.into()),
+            is_recording: Arc::new(true.into()),
+            is_first_loop: Arc::new(true.into()),
         }
     }
 }
