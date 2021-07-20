@@ -136,7 +136,7 @@ struct State {
 impl State {
     fn new() -> Self {
         Self {
-            samples: Arc::new(Mutex::new(vec![0.0; 44100 * 100])),
+            samples: Arc::new(vec![0.0; 44100 * 100].into()),
             loop_len: Arc::new(0.into()),
             total_samples: Arc::new(0.into()),
             is_recording: Arc::new(true.into()),
