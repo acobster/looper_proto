@@ -44,35 +44,23 @@ fn main() -> anyhow::Result<()> {
     // playback:
     // sample_idx = 0..loop_len-1
 
-    let samples: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(vec![0.0; 44100 * 100]));
-    let loop_len = Arc::new(AtomicUsize::new(0));
-    let total_samples = Arc::new(AtomicUsize::new(0));
-    let recording = Arc::new(AtomicBool::new(true));
-    let is_first_loop = Arc::new(AtomicBool::new(true));
-    let output_total_samples = total_samples.clone();
-    let output_is_first_loop = is_first_loop.clone();
+    let state = State::new();
+    let input_state = state.clone();
+    let output_state = state.clone();
 
-    // Clone these so we can modify them in response to user input.
-    let recording_mut = recording.clone();
-    let is_first_loop_mut = is_first_loop.clone();
-
-    // Clone our Arc so we can read from/write to it
-    // within separate input/output audio callbacks.
-    let input_samples = samples.clone();
-    let input_loop_len = loop_len.clone();
     let input_data_fn = move |data: &[f32], _: &cpal::InputCallbackInfo| {
-        if !recording.load(Ordering::Acquire) {
+        if !input_state.is_recording.load(Ordering::Acquire) {
             // We're not recording, save nothing.
             return;
         }
-        let mut input_samples_ = input_samples.lock().unwrap();
+        let mut samples = input_state.samples.lock().unwrap();
         for &sample in data {
             // Keep appending samples to the Vector
-            let len = total_samples.load(Ordering::Acquire);
-            input_samples_[len] = sample;
-            total_samples.store(len+1, Ordering::Release);
-            if is_first_loop.load(Ordering::Acquire) {
-                input_loop_len.store(len+1, Ordering::Release);
+            let len = input_state.total_samples.load(Ordering::Acquire);
+            samples[len] = sample;
+            input_state.total_samples.store(len + 1, Ordering::Release);
+            if input_state.is_first_loop.load(Ordering::Acquire) {
+                input_state.loop_len.store(len + 1, Ordering::Release);
             }
         }
         //println!("total_samples={}, input_loop_len={}", total_samples.load(Ordering::Acquire), input_loop_len.load(Ordering::Acquire));
@@ -82,22 +70,19 @@ fn main() -> anyhow::Result<()> {
     // Setup output callback & stream.
     let mut output_idx = 0;
     let output_data_fn = move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
-        if output_is_first_loop.load(Ordering::Acquire) {
+        if output_state.is_first_loop.load(Ordering::Acquire) {
             // Bail; no playback yet.
             return;
         }
 
-        let playback_samples = samples.lock().unwrap();
-        let len = loop_len.load(Ordering::Acquire);
-        let loop_count = div_ceil(
-            output_total_samples.load(Ordering::Acquire),
-            len
-        );
+        let playback_samples = output_state.samples.lock().unwrap();
+        let len = output_state.loop_len.load(Ordering::Acquire);
+        let loop_count = div_ceil(output_state.total_samples.load(Ordering::Acquire), len);
 
         for sample in data {
             // Sum up all samples at each corresponding index across loops.
             let mut sum = 0.0;
-            for loop_offset in 0..(loop_count-1) {
+            for loop_offset in 0..(loop_count - 1) {
                 let sample_idx = output_idx + len * loop_offset;
                 sum += playback_samples[sample_idx];
             }
@@ -122,13 +107,13 @@ fn main() -> anyhow::Result<()> {
     std::thread::sleep(std::time::Duration::from_secs(3));
     // end of thread::sleep() simulates the user pressing the recording button
     // a second time, signaling the end of the FIRST loop recording.
-    is_first_loop_mut.store(false, Ordering::Release);
+    state.is_first_loop.store(false, Ordering::Release);
     println!("SET FIRST LOOP LENGTH.");
 
     std::thread::sleep(std::time::Duration::from_secs(6));
     // end of thread::sleep() simulates the user pressing the recording button
     // a THIRD time, signaling the end of recording any new loops.
-    recording_mut.store(false, Ordering::Release);
+    state.is_recording.store(false, Ordering::Release);
     println!("DONE RECORDING.");
 
     std::thread::sleep(std::time::Duration::from_secs(6));
@@ -139,10 +124,30 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[derive(Clone)]
+struct State {
+    samples: Arc<Mutex<Vec<f32>>>,
+    loop_len: Arc<AtomicUsize>,
+    total_samples: Arc<AtomicUsize>,
+    is_recording: Arc<AtomicBool>,
+    is_first_loop: Arc<AtomicBool>,
+}
+
+impl State {
+    fn new() -> Self {
+        Self {
+            samples: Arc::new(Mutex::new(vec![0.0; 44100 * 100])),
+            loop_len: Arc::new(AtomicUsize::new(0)),
+            total_samples: Arc::new(AtomicUsize::new(0)),
+            is_recording: Arc::new(AtomicBool::new(true)),
+            is_first_loop: Arc::new(AtomicBool::new(true)),
+        }
+    }
+}
+
 fn err_fn(err: cpal::StreamError) {
     eprintln!("an error occurred on stream: {}", err);
 }
-
 
 #[inline]
 fn div_ceil(first: usize, other: usize) -> usize {
