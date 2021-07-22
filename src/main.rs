@@ -105,23 +105,17 @@ fn main() -> anyhow::Result<()> {
     looper.tap()?;
 
     // Simulate the user hitting RECORD on the pedal three times...
-    println!("RECORDING.");
     std::thread::sleep(std::time::Duration::from_secs(3));
     // end of thread::sleep() simulates the user pressing the recording button
     // a second time, signaling the end of the FIRST loop recording.
     looper.tap()?;
-    println!("SET FIRST LOOP LENGTH.");
 
     std::thread::sleep(std::time::Duration::from_secs(6));
     // end of thread::sleep() simulates the user pressing the recording button
     // a THIRD time, signaling the end of recording any new loops.
     looper.tap()?;
-    println!("DONE RECORDING.");
 
     std::thread::sleep(std::time::Duration::from_secs(6));
-
-    // drop(input_stream);
-    // drop(output_stream);
 
     Ok(())
 }
@@ -168,18 +162,19 @@ impl Looper {
     fn tap(&mut self) -> anyhow::Result<()> {
         match self.tap_count {
             0 => {
+                println!("RECORDING.");
                 self.state.is_recording.store(true, Ordering::SeqCst);
                 self.output.as_ref().unwrap().play()?;
                 self.input.as_ref().unwrap().play()?;
             },
             1 => {
+                println!("SET FIRST LOOP LENGTH.");
                 self.state.is_first_loop.store(false, Ordering::Release);
             },
-            2 => {
-                self.state.is_recording.store(false, Ordering::Release);
-            },
             _ => {
-                // TODO handle this more robustly
+                let is_recording = self.state.is_recording.load(Ordering::SeqCst);
+                self.state.is_recording.store(!is_recording, Ordering::Release);
+                println!("recording={}", !is_recording);
             },
         }
         self.tap_count += 1;
