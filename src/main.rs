@@ -1,4 +1,4 @@
-use cpal::{StreamConfig};
+use cpal::{Stream, StreamConfig};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -44,9 +44,9 @@ fn main() -> anyhow::Result<()> {
     // playback:
     // sample_idx = 0..loop_len-1
 
-    let state = State::new();
-    let input_state = state.clone();
-    let output_state = state.clone();
+    let mut looper = Looper::new();
+    let input_state = looper.state.clone();
+    let output_state = looper.state.clone();
 
     let input_data_fn = move |data: &[f32], _: &cpal::InputCallbackInfo| {
         if !input_state.is_recording.load(Ordering::Acquire) {
@@ -99,27 +99,29 @@ fn main() -> anyhow::Result<()> {
     };
     let output_stream = output.build_output_stream(&config, output_data_fn, err_fn)?;
 
-    output_stream.play()?;
-    input_stream.play()?;
+    looper.input = Some(input_stream);
+    looper.output = Some(output_stream);
+
+    looper.tap()?;
 
     // Simulate the user hitting RECORD on the pedal three times...
     println!("RECORDING.");
     std::thread::sleep(std::time::Duration::from_secs(3));
     // end of thread::sleep() simulates the user pressing the recording button
     // a second time, signaling the end of the FIRST loop recording.
-    state.is_first_loop.store(false, Ordering::Release);
+    looper.tap()?;
     println!("SET FIRST LOOP LENGTH.");
 
     std::thread::sleep(std::time::Duration::from_secs(6));
     // end of thread::sleep() simulates the user pressing the recording button
     // a THIRD time, signaling the end of recording any new loops.
-    state.is_recording.store(false, Ordering::Release);
+    looper.tap()?;
     println!("DONE RECORDING.");
 
     std::thread::sleep(std::time::Duration::from_secs(6));
 
-    drop(input_stream);
-    drop(output_stream);
+    // drop(input_stream);
+    // drop(output_stream);
 
     Ok(())
 }
@@ -139,9 +141,49 @@ impl State {
             samples: Arc::new(vec![0.0; 44100 * 100].into()),
             loop_len: Arc::new(0.into()),
             total_samples: Arc::new(0.into()),
-            is_recording: Arc::new(true.into()),
+            is_recording: Arc::new(false.into()),
             is_first_loop: Arc::new(true.into()),
         }
+    }
+}
+
+struct Looper {
+    pub state: State,
+    pub input: Option<cpal::Stream>,
+    pub output: Option<cpal::Stream>,
+
+    pub tap_count: usize,
+}
+
+impl Looper {
+    fn new() -> Self {
+        Self {
+            state: State::new(),
+            input: None,
+            output: None,
+            tap_count: 0,
+        }
+    }
+
+    fn tap(&mut self) -> anyhow::Result<()> {
+        match self.tap_count {
+            0 => {
+                self.state.is_recording.store(true, Ordering::SeqCst);
+                self.output.as_ref().unwrap().play()?;
+                self.input.as_ref().unwrap().play()?;
+            },
+            1 => {
+                self.state.is_first_loop.store(false, Ordering::Release);
+            },
+            2 => {
+                self.state.is_recording.store(false, Ordering::Release);
+            },
+            _ => {
+                // TODO handle this more robustly
+            },
+        }
+        self.tap_count += 1;
+        Ok(())
     }
 }
 
