@@ -62,7 +62,6 @@ fn main() -> anyhow::Result<()> {
                 input_state.loop_len.store(len + 1, Ordering::Release);
             }
         }
-        //println!("total_samples={}, input_loop_len={}", total_samples.load(Ordering::Acquire), input_loop_len.load(Ordering::Acquire));
     };
     let input_stream = input.build_input_stream(&config, input_data_fn, err_fn)?;
 
@@ -94,29 +93,26 @@ fn main() -> anyhow::Result<()> {
                 output_idx = 0;
             }
         }
-        //println!("output_idx={}", output_idx);
     };
     let output_stream = output.build_output_stream(&config, output_data_fn, err_fn)?;
 
     looper.input = Some(input_stream);
     looper.output = Some(output_stream);
 
-    looper.tap()?;
-
-    // Simulate the user hitting RECORD on the pedal three times...
-    std::thread::sleep(std::time::Duration::from_secs(3));
-    // end of thread::sleep() simulates the user pressing the recording button
-    // a second time, signaling the end of the FIRST loop recording.
-    looper.tap()?;
-
-    std::thread::sleep(std::time::Duration::from_secs(6));
-    // end of thread::sleep() simulates the user pressing the recording button
-    // a THIRD time, signaling the end of recording any new loops.
-    looper.tap()?;
-
-    std::thread::sleep(std::time::Duration::from_secs(6));
+    init_ui(looper);
 
     Ok(())
+}
+
+// TODO different implementations of this for different platforms.
+// This should be the only platform-specific feature.
+fn init_ui(mut looper: Looper) {
+    let mut line = String::new();
+    println!("Hit ENTER to start recording.");
+    loop {
+        let _ = std::io::stdin().read_line(&mut line).unwrap();
+        looper.tap().expect("tap failed!");
+    }
 }
 
 #[derive(Clone)]
