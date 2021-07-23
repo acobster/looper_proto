@@ -1,4 +1,3 @@
-use cpal::{StreamConfig};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -15,7 +14,7 @@ fn main() -> anyhow::Result<()> {
     println!("Input device: {}", input.name()?);
     println!("Output device: {}", output.name()?);
 
-    let config: StreamConfig = output.default_input_config()?.into();
+    let config: cpal::StreamConfig = output.default_input_config()?.into();
     println!("Output config:  {:?}", config);
 
     // Design notes:
@@ -45,9 +44,9 @@ fn main() -> anyhow::Result<()> {
     // playback:
     // sample_idx = 0..loop_len-1
 
-    let state = State::new();
-    let input_state = state.clone();
-    let output_state = state.clone();
+    let mut looper = Looper::new();
+    let input_state = looper.state.clone();
+    let output_state = looper.state.clone();
 
     let (producer, consumer) = mpsc::channel::<Clip>();
 
@@ -134,31 +133,13 @@ fn main() -> anyhow::Result<()> {
                 output_idx = 0;
             }
         }
-        //println!("output_idx={}", output_idx);
     };
     let output_stream = output.build_output_stream(&config, output_data_fn, err_fn)?;
 
-    output_stream.play()?;
-    input_stream.play()?;
+    looper.input = Some(input_stream);
+    looper.output = Some(output_stream);
 
-    // Simulate the user hitting RECORD on the pedal three times...
-    println!("RECORDING.");
-    std::thread::sleep(std::time::Duration::from_secs(3));
-    // end of thread::sleep() simulates the user pressing the recording button
-    // a second time, signaling the end of the FIRST loop recording.
-    state.is_first_loop.store(false, Ordering::Release);
-    println!("SET FIRST LOOP LENGTH.");
-
-    std::thread::sleep(std::time::Duration::from_secs(6));
-    // end of thread::sleep() simulates the user pressing the recording button
-    // a THIRD time, signaling the end of recording any new loops.
-    state.is_recording.store(false, Ordering::Release);
-    println!("DONE RECORDING.");
-
-    std::thread::sleep(std::time::Duration::from_secs(6));
-
-    drop(input_stream);
-    drop(output_stream);
+    init_ui(looper);
 
     Ok(())
 }
@@ -183,6 +164,17 @@ impl SampleBank {
     }
 }
 
+// TODO different implementations of this for different platforms.
+// This should be the only platform-specific feature.
+fn init_ui(mut looper: Looper) {
+    let mut line = String::new();
+    println!("Hit ENTER to start recording.");
+    loop {
+        let _ = std::io::stdin().read_line(&mut line).unwrap();
+        looper.tap().expect("tap failed!");
+    }
+}
+
 #[derive(Clone)]
 struct State {
     loop_len: Arc<AtomicUsize>,
@@ -196,7 +188,7 @@ impl State {
         Self {
             loop_len: Arc::new(0.into()),
             total_samples: Arc::new(0.into()),
-            is_recording: Arc::new(true.into()),
+            is_recording: Arc::new(false.into()),
             is_first_loop: Arc::new(true.into()),
         }
     }
@@ -213,6 +205,47 @@ impl Clip {
             samples: samples,
             start: start,
         }
+    }
+}
+
+struct Looper {
+    pub state: State,
+    pub input: Option<cpal::Stream>,
+    pub output: Option<cpal::Stream>,
+
+    pub tap_count: usize,
+}
+
+impl Looper {
+    fn new() -> Self {
+        Self {
+            state: State::new(),
+            input: None,
+            output: None,
+            tap_count: 0,
+        }
+    }
+
+    fn tap(&mut self) -> anyhow::Result<()> {
+        match self.tap_count {
+            0 => {
+                println!("RECORDING.");
+                self.state.is_recording.store(true, Ordering::SeqCst);
+                self.output.as_ref().unwrap().play()?;
+                self.input.as_ref().unwrap().play()?;
+            },
+            1 => {
+                println!("SET FIRST LOOP LENGTH.");
+                self.state.is_first_loop.store(false, Ordering::Release);
+            },
+            _ => {
+                let is_recording = self.state.is_recording.load(Ordering::SeqCst);
+                self.state.is_recording.store(!is_recording, Ordering::Release);
+                println!("recording={}", !is_recording);
+            },
+        }
+        self.tap_count += 1;
+        Ok(())
     }
 }
 
