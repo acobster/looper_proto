@@ -1,4 +1,3 @@
-use cpal::{Stream, StreamConfig};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -14,7 +13,7 @@ fn main() -> anyhow::Result<()> {
     println!("Input device: {}", input.name()?);
     println!("Output device: {}", output.name()?);
 
-    let config: StreamConfig = output.default_input_config()?.into();
+    let config: cpal::StreamConfig = output.default_input_config()?.into();
     println!("Output config:  {:?}", config);
 
     // Design notes:
