@@ -183,6 +183,11 @@ impl State {
         self.is_recording.load(Ordering::SeqCst)
     }
 
+    fn toggle_recording(&self) {
+        let rec = self.recording();
+        self.is_recording.store(!rec, Ordering::SeqCst);
+    }
+
     fn first_loop(&self) -> bool {
         self.get_loop_count() == 0
     }
@@ -264,7 +269,8 @@ impl Looper {
         match self.tap_count {
             0 => {
                 println!("RECORDING.");
-                self.state.is_recording.store(true, Ordering::SeqCst);
+                self.state.toggle_recording();
+                // Play input/output streams.
                 self.output.as_ref().unwrap().play()?;
                 self.input.as_ref().unwrap().play()?;
             },
@@ -273,9 +279,8 @@ impl Looper {
                 self.state.inc_loop_count();
             },
             _ => {
-                let is_recording = self.state.is_recording.load(Ordering::SeqCst);
-                self.state.is_recording.store(!is_recording, Ordering::Release);
-                println!("recording={}", !is_recording);
+                self.state.toggle_recording();
+                println!("recording={}", self.state.recording());
             },
         }
         self.tap_count += 1;
