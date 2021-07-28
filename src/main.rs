@@ -46,7 +46,7 @@ fn main() -> anyhow::Result<()> {
 
     let mut looper = Looper::new();
     let input_state = looper.state.clone();
-    let output_state = looper.state.clone();
+    let mut output_state = looper.state.clone();
 
     let (producer, consumer) = mpsc::channel::<Clip>();
 
@@ -62,7 +62,6 @@ fn main() -> anyhow::Result<()> {
     let input_stream = input.build_input_stream(&config, input_data_fn, err_fn)?;
 
     // Setup output callback & stream.
-    let mut output_idx = 0;
     let mut bank = SampleBank::new(vec![0.0; 44100 * 1000]);
     let output_data_fn = move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
 
@@ -111,17 +110,13 @@ fn main() -> anyhow::Result<()> {
             // Sum up all samples at each corresponding index across loops.
             let mut sum = 0.0;
             for loop_offset in 0..(loop_count - 1) {
-                let sample_idx = output_idx + len * loop_offset;
+                let sample_idx = output_state.get_playback() + len * loop_offset;
                 sum += bank.samples[sample_idx];
             }
             // TODO dynamic range compression!
             *sample = sum;
 
-            output_idx += 1;
-            if output_idx >= len {
-                // RESET THE LOOP PLAYBACK
-                output_idx = 0;
-            }
+            output_state.advance_playback();
         }
     };
     let output_stream = output.build_output_stream(&config, output_data_fn, err_fn)?;
@@ -183,6 +178,41 @@ impl State {
             is_recording: Arc::new(false.into()),
             is_first_loop: Arc::new(true.into()),
         }
+    }
+
+    fn recording(&self) -> bool {
+        self.is_recording.load(Ordering::SeqCst)
+    }
+
+    fn first_loop(&self) -> bool {
+        self.is_first_loop.load(Ordering::SeqCst)
+    }
+
+    fn began_recording(&self) -> bool {
+        self.recording() || !self.first_loop()
+    }
+
+    fn get_playback(&self) -> usize {
+        self.playback.load(Ordering::SeqCst)
+    }
+
+    fn get_loop_len(&self) -> usize {
+        self.loop_len.load(Ordering::SeqCst)
+    }
+
+    fn advance_playback(&mut self) {
+        if !self.began_recording() {
+            return;
+        }
+
+        let mut playback = self.get_playback();
+        playback += 1;
+
+        if playback >= self.get_loop_len() {
+            playback = 0;
+        }
+
+        self.playback.store(playback, Ordering::SeqCst);
     }
 }
 
