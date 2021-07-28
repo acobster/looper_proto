@@ -51,14 +51,14 @@ fn main() -> anyhow::Result<()> {
     let (producer, consumer) = mpsc::channel::<Clip>();
 
     let input_data_fn = move |data: &[f32], _: &cpal::InputCallbackInfo| {
-        if !input_state.is_recording.load(Ordering::SeqCst) {
+        if !input_state.recording() {
             // We're not recording, save nothing.
             return;
         }
 
         producer.send(Clip::new(
                 data.to_vec(),
-                input_state.get_write_index()
+                input_state.get_write_index(data.len())
         )).unwrap();
     };
     let input_stream = input.build_input_stream(&config, input_data_fn, err_fn)?;
@@ -203,8 +203,18 @@ impl State {
         self.total_samples.load(Ordering::SeqCst)
     }
 
-    fn get_write_index(&self) -> usize {
-        self.get_total_samples()
+    // Get the current index at which we should start writing new Clips.
+    // Takes an offset (number of samples) to subtract from the playback idx
+    // on subsequent loops. The first time through the loop, we don't worry
+    // about the offset because we don't need to account for playback: we're
+    // we're just tacking onto the end of whatever's been recorded so far.
+    fn get_write_index(&self, offset: usize) -> usize {
+        if self.first_loop() {
+            self.get_total_samples()
+        } else {
+            self.get_loop_count() * self.get_loop_len()
+                + self.get_playback() - offset
+        }
     }
 
     fn inc_loop_count(&mut self) {
