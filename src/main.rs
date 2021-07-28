@@ -56,8 +56,10 @@ fn main() -> anyhow::Result<()> {
             return;
         }
 
-        let idx = input_state.get_total_samples();
-        let _ = producer.send(Clip::new(data.to_vec(), idx));
+        producer.send(Clip::new(
+                data.to_vec(),
+                input_state.get_write_index()
+        )).unwrap();
     };
     let input_stream = input.build_input_stream(&config, input_data_fn, err_fn)?;
 
@@ -199,6 +201,10 @@ impl State {
 
     fn get_total_samples(&self) -> usize {
         self.total_samples.load(Ordering::SeqCst)
+    }
+
+    fn get_write_index(&self) -> usize {
+        self.get_total_samples()
     }
 
     fn inc_loop_count(&mut self) {
