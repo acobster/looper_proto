@@ -156,7 +156,7 @@ impl SampleBank {
     }
 
     // Write new samples contiguously to this SampleBank, starting at idx
-    fn write_at(mut self: Self, mut idx: usize, samples: Vec<f32>) {
+    fn write_at(&mut self, mut idx: usize, samples: Vec<f32>) {
         for sample in samples {
             self.samples[idx] = sample;
             idx += 1;
