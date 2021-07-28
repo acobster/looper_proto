@@ -167,6 +167,7 @@ fn init_ui(mut looper: Looper) {
 
 #[derive(Clone)]
 struct State {
+    playback: Arc<AtomicUsize>,
     loop_len: Arc<AtomicUsize>,
     total_samples: Arc<AtomicUsize>,
     is_recording: Arc<AtomicBool>,
@@ -176,6 +177,7 @@ struct State {
 impl State {
     fn new() -> Self {
         Self {
+            playback: Arc::new(0.into()),
             loop_len: Arc::new(0.into()),
             total_samples: Arc::new(0.into()),
             is_recording: Arc::new(false.into()),
