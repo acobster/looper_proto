@@ -152,10 +152,19 @@ fn init_ui(mut looper: Looper) {
 
 #[derive(Clone)]
 struct State {
+    // Where we are in the playback, relative to the start of each loop layer.
+    // This will always be a number between 0 and loop_len.
     playback: Arc<AtomicUsize>,
+    // Number of samples in the current loop (i.e. in every loop layer).
+    // This determines when playback resets, as well as how far ahead we're
+    // allowed to write into SampleBank.
     loop_len: Arc<AtomicUsize>,
+    // The number of partially or completely recorded loops.
     loop_count: Arc<AtomicUsize>,
+    // Total samples across all loop layers.
     total_samples: Arc<AtomicUsize>,
+    // Whether we're currently recording new samples,
+    // i.e. writing to SampleBank.
     is_recording: Arc<AtomicBool>,
 }
 
