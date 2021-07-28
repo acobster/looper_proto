@@ -51,39 +51,23 @@ fn main() -> anyhow::Result<()> {
     let (producer, consumer) = mpsc::channel::<Clip>();
 
     let input_data_fn = move |data: &[f32], _: &cpal::InputCallbackInfo| {
-        if !input_state.is_recording.load(Ordering::Acquire) {
+        if !input_state.is_recording.load(Ordering::SeqCst) {
             // We're not recording, save nothing.
             return;
         }
 
-        let idx = input_state.total_samples.load(Ordering::Acquire);
+        let idx = input_state.total_samples.load(Ordering::SeqCst);
         let _ = producer.send(Clip::new(data.to_vec(), idx));
-
-        // Update state to account for newly recorded samples.
-        let len = input_state.total_samples.load(Ordering::SeqCst);
-        input_state.total_samples.store(len + data.len(), Ordering::SeqCst);
-        if input_state.is_first_loop.load(Ordering::SeqCst) {
-            input_state.loop_len.store(len + data.len(), Ordering::SeqCst);
-        }
-        //let mut samples = input_state.samples.lock().unwrap();
-        //for &sample in data {
-        //    // Keep appending samples to the Vector
-        //    let len = input_state.total_samples.load(Ordering::Acquire);
-        //    samples[len] = sample;
-        //    input_state.total_samples.store(len + 1, Ordering::Release);
-        //    if input_state.is_first_loop.load(Ordering::Acquire) {
-        //        input_state.loop_len.store(len + 1, Ordering::Release);
-        //    }
-        //}
     };
     let input_stream = input.build_input_stream(&config, input_data_fn, err_fn)?;
 
     // Setup output callback & stream.
     let mut output_idx = 0;
-    let mut bank = SampleBank::new(vec![0.0; 44100 * 100]);
+    let mut bank = SampleBank::new(vec![0.0; 44100 * 1000]);
     let output_data_fn = move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
 
         let len = output_state.loop_len.load(Ordering::SeqCst);
+        let total_samples = output_state.total_samples.load(Ordering::SeqCst);
 
         // TODO
         // pop Option<Vec> off the queue
@@ -91,9 +75,14 @@ fn main() -> anyhow::Result<()> {
         // concat samples
         match consumer.try_recv() {
             Ok(clip) => {
-                if output_state.is_first_loop.load(Ordering::SeqCst) {
-                    println!("clip of length {} at idx {}", clip.samples.len(), clip.start);
-                    bank.write_at(clip.start, clip.samples);
+                if output_state.is_recording.load(Ordering::SeqCst) {
+                    //println!("clip of length {} at idx {}", clip.samples.len(), clip.start);
+                    bank.write_at(clip.start, &clip.samples);
+                    // Update state to account for newly recorded samples.
+                    output_state.total_samples.store(total_samples + clip.samples.len(), Ordering::SeqCst);
+                    if output_state.is_first_loop.load(Ordering::SeqCst) {
+                        output_state.loop_len.store(len + clip.samples.len(), Ordering::SeqCst);
+                    }
                 }
             },
             Err(_) => {
@@ -108,8 +97,9 @@ fn main() -> anyhow::Result<()> {
 
         // Load the new loop_len
         let len = output_state.loop_len.load(Ordering::SeqCst);
-        let loop_count = div_ceil(output_state.total_samples.load(Ordering::SeqCst), len);
-        println!("len={}, loop_count={}, output_idx={}", len, loop_count, output_idx);
+        let total_samples = output_state.total_samples.load(Ordering::SeqCst);
+        let loop_count = div_ceil(total_samples, len);
+        //println!("loop_count = {} / {} = {}, output_idx={}", total_samples, len, loop_count, output_idx);
 
         // Still possible there are no clips yet, in which case we don't
         // need to do anything.
@@ -156,9 +146,9 @@ impl SampleBank {
     }
 
     // Write new samples contiguously to this SampleBank, starting at idx
-    fn write_at(&mut self, mut idx: usize, samples: Vec<f32>) {
+    fn write_at(&mut self, mut idx: usize, samples: &Vec<f32>) {
         for sample in samples {
-            self.samples[idx] = sample;
+            self.samples[idx] = *sample;
             idx += 1;
         }
     }
