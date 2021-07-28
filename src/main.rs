@@ -79,7 +79,7 @@ fn main() -> anyhow::Result<()> {
                     bank.write_at(clip.start, &clip.samples);
                     // Update state to account for newly recorded samples.
                     output_state.total_samples.store(total_samples + clip.samples.len(), Ordering::SeqCst);
-                    if output_state.is_first_loop.load(Ordering::SeqCst) {
+                    if output_state.first_loop() {
                         output_state.loop_len.store(len + clip.samples.len(), Ordering::SeqCst);
                     }
                 }
@@ -89,27 +89,17 @@ fn main() -> anyhow::Result<()> {
             },
         }
 
-        if output_state.is_first_loop.load(Ordering::SeqCst) {
+        if output_state.first_loop() {
             // Bail; no playback yet.
             return;
         }
 
         // Load the new loop_len
-        let len = output_state.loop_len.load(Ordering::SeqCst);
-        let total_samples = output_state.total_samples.load(Ordering::SeqCst);
-        let loop_count = div_ceil(total_samples, len);
-        //println!("loop_count = {} / {} = {}, output_idx={}", total_samples, len, loop_count, output_idx);
-
-        // Still possible there are no clips yet, in which case we don't
-        // need to do anything.
-        if loop_count < 1 {
-            return;
-        }
-
+        let len = output_state.get_loop_len();
         for sample in data {
             // Sum up all samples at each corresponding index across loops.
             let mut sum = 0.0;
-            for loop_offset in 0..(loop_count - 1) {
+            for loop_offset in 0..output_state.get_loop_count() {
                 let sample_idx = output_state.get_playback() + len * loop_offset;
                 sum += bank.samples[sample_idx];
             }
@@ -164,9 +154,9 @@ fn init_ui(mut looper: Looper) {
 struct State {
     playback: Arc<AtomicUsize>,
     loop_len: Arc<AtomicUsize>,
+    loop_count: Arc<AtomicUsize>,
     total_samples: Arc<AtomicUsize>,
     is_recording: Arc<AtomicBool>,
-    is_first_loop: Arc<AtomicBool>,
 }
 
 impl State {
@@ -174,9 +164,9 @@ impl State {
         Self {
             playback: Arc::new(0.into()),
             loop_len: Arc::new(0.into()),
+            loop_count: Arc::new(0.into()),
             total_samples: Arc::new(0.into()),
             is_recording: Arc::new(false.into()),
-            is_first_loop: Arc::new(true.into()),
         }
     }
 
@@ -185,7 +175,7 @@ impl State {
     }
 
     fn first_loop(&self) -> bool {
-        self.is_first_loop.load(Ordering::SeqCst)
+        self.get_loop_count() == 0
     }
 
     fn began_recording(&self) -> bool {
@@ -200,6 +190,15 @@ impl State {
         self.loop_len.load(Ordering::SeqCst)
     }
 
+    fn get_loop_count(&self) -> usize {
+        self.loop_count.load(Ordering::SeqCst)
+    }
+
+    fn inc_loop_count(&mut self) {
+        let count = self.get_loop_count();
+        self.loop_count.store(count + 1, Ordering::SeqCst);
+    }
+
     fn advance_playback(&mut self) {
         if !self.began_recording() {
             return;
@@ -210,6 +209,10 @@ impl State {
 
         if playback >= self.get_loop_len() {
             playback = 0;
+            if self.recording() {
+                // We went past the end of the current loop while recording.
+                self.inc_loop_count();
+            }
         }
 
         self.playback.store(playback, Ordering::SeqCst);
@@ -258,7 +261,7 @@ impl Looper {
             },
             1 => {
                 println!("SET FIRST LOOP LENGTH.");
-                self.state.is_first_loop.store(false, Ordering::Release);
+                self.state.inc_loop_count();
             },
             _ => {
                 let is_recording = self.state.is_recording.load(Ordering::SeqCst);
@@ -273,15 +276,4 @@ impl Looper {
 
 fn err_fn(err: cpal::StreamError) {
     eprintln!("an error occurred on stream: {}", err);
-}
-
-#[inline]
-fn div_ceil(first: usize, other: usize) -> usize {
-    if other == 0 {
-        0
-    } else if (first % other) > 0 && other > 0 {
-        first / other + 1
-    } else {
-        first / other
-    }
 }
