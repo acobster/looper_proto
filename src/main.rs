@@ -1,6 +1,7 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::mpsc;
 
 fn main() -> anyhow::Result<()> {
     // Set up an audio Device.
@@ -47,42 +48,71 @@ fn main() -> anyhow::Result<()> {
     let input_state = looper.state.clone();
     let output_state = looper.state.clone();
 
+    let (producer, consumer) = mpsc::channel::<Clip>();
+
     let input_data_fn = move |data: &[f32], _: &cpal::InputCallbackInfo| {
-        if !input_state.is_recording.load(Ordering::Acquire) {
+        if !input_state.is_recording.load(Ordering::SeqCst) {
             // We're not recording, save nothing.
             return;
         }
-        let mut samples = input_state.samples.lock().unwrap();
-        for &sample in data {
-            // Keep appending samples to the Vector
-            let len = input_state.total_samples.load(Ordering::Acquire);
-            samples[len] = sample;
-            input_state.total_samples.store(len + 1, Ordering::Release);
-            if input_state.is_first_loop.load(Ordering::Acquire) {
-                input_state.loop_len.store(len + 1, Ordering::Release);
-            }
-        }
+
+        let idx = input_state.total_samples.load(Ordering::SeqCst);
+        let _ = producer.send(Clip::new(data.to_vec(), idx));
     };
     let input_stream = input.build_input_stream(&config, input_data_fn, err_fn)?;
 
     // Setup output callback & stream.
     let mut output_idx = 0;
+    let mut bank = SampleBank::new(vec![0.0; 44100 * 1000]);
     let output_data_fn = move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
-        if output_state.is_first_loop.load(Ordering::Acquire) {
+
+        let len = output_state.loop_len.load(Ordering::SeqCst);
+        let total_samples = output_state.total_samples.load(Ordering::SeqCst);
+
+        // TODO
+        // pop Option<Vec> off the queue
+        // increase loop_len if first loop
+        // concat samples
+        match consumer.try_recv() {
+            Ok(clip) => {
+                if output_state.is_recording.load(Ordering::SeqCst) {
+                    //println!("clip of length {} at idx {}", clip.samples.len(), clip.start);
+                    bank.write_at(clip.start, &clip.samples);
+                    // Update state to account for newly recorded samples.
+                    output_state.total_samples.store(total_samples + clip.samples.len(), Ordering::SeqCst);
+                    if output_state.is_first_loop.load(Ordering::SeqCst) {
+                        output_state.loop_len.store(len + clip.samples.len(), Ordering::SeqCst);
+                    }
+                }
+            },
+            Err(_) => {
+                // No new clips
+            },
+        }
+
+        if output_state.is_first_loop.load(Ordering::SeqCst) {
             // Bail; no playback yet.
             return;
         }
 
-        let playback_samples = output_state.samples.lock().unwrap();
-        let len = output_state.loop_len.load(Ordering::Acquire);
-        let loop_count = div_ceil(output_state.total_samples.load(Ordering::Acquire), len);
+        // Load the new loop_len
+        let len = output_state.loop_len.load(Ordering::SeqCst);
+        let total_samples = output_state.total_samples.load(Ordering::SeqCst);
+        let loop_count = div_ceil(total_samples, len);
+        //println!("loop_count = {} / {} = {}, output_idx={}", total_samples, len, loop_count, output_idx);
+
+        // Still possible there are no clips yet, in which case we don't
+        // need to do anything.
+        if loop_count < 1 {
+            return;
+        }
 
         for sample in data {
             // Sum up all samples at each corresponding index across loops.
             let mut sum = 0.0;
             for loop_offset in 0..(loop_count - 1) {
                 let sample_idx = output_idx + len * loop_offset;
-                sum += playback_samples[sample_idx];
+                sum += bank.samples[sample_idx];
             }
             // TODO dynamic range compression!
             *sample = sum;
@@ -104,6 +134,26 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+struct SampleBank {
+    samples: Vec<f32>,
+}
+
+impl SampleBank {
+    fn new(samples: Vec<f32>) -> Self {
+        Self {
+            samples: samples,
+        }
+    }
+
+    // Write new samples contiguously to this SampleBank, starting at idx
+    fn write_at(&mut self, mut idx: usize, samples: &Vec<f32>) {
+        for sample in samples {
+            self.samples[idx] = *sample;
+            idx += 1;
+        }
+    }
+}
+
 // TODO different implementations of this for different platforms.
 // This should be the only platform-specific feature.
 fn init_ui(mut looper: Looper) {
@@ -117,7 +167,6 @@ fn init_ui(mut looper: Looper) {
 
 #[derive(Clone)]
 struct State {
-    samples: Arc<Mutex<Vec<f32>>>,
     loop_len: Arc<AtomicUsize>,
     total_samples: Arc<AtomicUsize>,
     is_recording: Arc<AtomicBool>,
@@ -127,11 +176,24 @@ struct State {
 impl State {
     fn new() -> Self {
         Self {
-            samples: Arc::new(vec![0.0; 44100 * 100].into()),
             loop_len: Arc::new(0.into()),
             total_samples: Arc::new(0.into()),
             is_recording: Arc::new(false.into()),
             is_first_loop: Arc::new(true.into()),
+        }
+    }
+}
+
+struct Clip {
+    samples: Vec<f32>,
+    start: usize,
+}
+
+impl Clip {
+    fn new(samples: Vec<f32>, start: usize) -> Self {
+        Self {
+            samples: samples,
+            start: start,
         }
     }
 }
@@ -183,7 +245,9 @@ fn err_fn(err: cpal::StreamError) {
 
 #[inline]
 fn div_ceil(first: usize, other: usize) -> usize {
-    if (first % other) > 0 && other > 0 {
+    if other == 0 {
+        0
+    } else if (first % other) > 0 && other > 0 {
         first / other + 1
     } else {
         first / other
