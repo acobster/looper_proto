@@ -56,7 +56,7 @@ fn main() -> anyhow::Result<()> {
             return;
         }
 
-        let idx = input_state.total_samples.load(Ordering::SeqCst);
+        let idx = input_state.get_total_samples();
         let _ = producer.send(Clip::new(data.to_vec(), idx));
     };
     let input_stream = input.build_input_stream(&config, input_data_fn, err_fn)?;
@@ -64,24 +64,13 @@ fn main() -> anyhow::Result<()> {
     // Setup output callback & stream.
     let mut bank = SampleBank::new(vec![0.0; 44100 * 1000]);
     let output_data_fn = move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
-
-        let len = output_state.loop_len.load(Ordering::SeqCst);
-        let total_samples = output_state.total_samples.load(Ordering::SeqCst);
-
-        // TODO
-        // pop Option<Vec> off the queue
-        // increase loop_len if first loop
-        // concat samples
         match consumer.try_recv() {
             Ok(clip) => {
                 if output_state.is_recording.load(Ordering::SeqCst) {
                     //println!("clip of length {} at idx {}", clip.samples.len(), clip.start);
                     bank.write_at(clip.start, &clip.samples);
                     // Update state to account for newly recorded samples.
-                    output_state.total_samples.store(total_samples + clip.samples.len(), Ordering::SeqCst);
-                    if output_state.first_loop() {
-                        output_state.loop_len.store(len + clip.samples.len(), Ordering::SeqCst);
-                    }
+                    output_state.add_sample_count(clip.samples.len());
                 }
             },
             Err(_) => {
@@ -208,9 +197,22 @@ impl State {
         self.loop_count.load(Ordering::SeqCst)
     }
 
+    fn get_total_samples(&self) -> usize {
+        self.total_samples.load(Ordering::SeqCst)
+    }
+
     fn inc_loop_count(&mut self) {
         let count = self.get_loop_count();
         self.loop_count.store(count + 1, Ordering::SeqCst);
+    }
+
+    fn add_sample_count(&mut self, n: usize) {
+        let new_total = self.get_total_samples() + n;
+        self.total_samples.store(new_total, Ordering::SeqCst);
+
+        if self.first_loop() {
+            self.loop_len.store(self.get_loop_len() + n, Ordering::SeqCst);
+        }
     }
 
     fn advance_playback(&mut self) {
